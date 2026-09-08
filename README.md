@@ -1,43 +1,94 @@
-# Window Recorder
+<div align="center">
 
-Record **one exact window** with OBS — never your whole screen. Pick any window from a list, work freely in other windows, and stop recording by simply closing the recorded window.
+# 🎬 GhostRec OBS
 
-## Features
+**Record any window. Only that window. Never your whole screen.**
 
-- **HWND lock** — pins the exact window by its handle. Survives title changes, never drifts to other windows.
-- **Auto scene** — creates a dedicated OBS scene with only the window capture source. No manual scene setup.
-- **Audio monitoring** — warns when sound goes silent for too long.
-- **Loop picker** — record multiple windows back-to-back without restarting.
-- **One-click launcher** — `start_recorder.bat` handles deps, OBS connection, and opens the picker.
+A Python-powered OBS automation tool that locks onto a single window by its Windows handle (HWND), survives title changes, and stops recording when you close the window.
 
-## Requirements
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![OBS Studio](https://img.shields.io/badge/OBS_Studio-28+-302E33?style=for-the-badge&logo=obs-studio&logoColor=white)](https://obsproject.com)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com)
 
-- Windows 10/11
-- Python 3.10+
-- [OBS Studio](https://obsproject.com/) 28+ with WebSocket server enabled
 
-## Quick Start
+<br>
+
+**Pick a window → Record → Close to stop → Done.**
+
+</div>
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---------|-------------|
+| 🔒 **HWND Lock** | Pins the exact window by its handle. Title changes re-lock it; other windows are never recorded. |
+| 🎬 **Auto Scene** | Creates a dedicated OBS scene with only the window capture source — no manual setup needed. |
+| 🔇 **Audio Monitoring** | Warns when sound goes silent for too long. |
+| 🔄 **Loop Picker** | Record multiple windows back-to-back without restarting. |
+| ⚡ **One-Click Launcher** | `start_recorder.bat` handles deps, OBS connection, and opens the picker. |
+
+---
+
+## 📋 Requirements
+
+- **OS:** Windows 10 / 11
+- **Python:** 3.10+
+- **OBS Studio:** 28+ with WebSocket server enabled
+
+---
+
+## 🚀 Quick Start
+
+### Option 1: One-Click (Recommended)
+
+1. **Clone** the repo
+2. **Copy** `config.example.json` → `config.json` and fill in your OBS password
+3. **Double-click** `start_recorder.bat`
+
+That's it. The launcher handles everything.
+
+### Option 2: Manual
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/yourname/window-recorder.git
-cd window-recorder
+# Clone
+git clone https://github.com/jaeef/ghostrec-obs.git
+cd ghostrec-obs
 
-# 2. Install dependencies
+# Install dependencies
 pip install -r requirements.txt
 
-# 3. Copy config template and fill in your OBS password
+# Setup config
 copy config.example.json config.json
+# Edit config.json → fill in obs.password
 
-# 4. Run
-start_recorder.bat
+# Run
+python record.py
 ```
 
-Or double-click `start_recorder.bat` — it installs missing deps and waits for OBS automatically.
+---
 
-## Configuration
+## ⚙️ Configuration
 
-Edit `config.json` (copied from `config.example.json`):
+Copy `config.example.json` to `config.json` and edit:
+
+```json
+{
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4455,
+    "password": "YOUR_OBS_WEBSOCKET_PASSWORD"
+  },
+  "output_folder": "./recordings",
+  "audio": {
+    "check": true,
+    "input_name": "Desktop Audio",
+    "silence_db": -55.0,
+    "silence_alert_seconds": 30
+  }
+}
+```
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -49,37 +100,37 @@ Edit `config.json` (copied from `config.example.json`):
 | `audio.silence_db` | `-55.0` | Silence threshold (dB) |
 | `audio.silence_alert_seconds` | `30` | Seconds of silence before warning |
 
-### Enable OBS WebSocket
+### 🔌 Enable OBS WebSocket
 
-1. Open OBS Studio
-2. **Tools > WebSocket Server Settings**
+1. Open **OBS Studio**
+2. Go to **Tools → WebSocket Server Settings**
 3. Enable the server (port `4455`)
 4. Copy the password into `config.json`
 
-## Usage
+---
 
-### Interactive picker
+## 🎯 Usage
+
+### Start Recording
 
 ```bash
 python record.py
 ```
 
-1. A numbered list of open windows appears
-2. Type the **number** of the window to record (`r` to refresh, `q` to quit)
+1. A numbered list of all open windows appears
+2. Type the **number** of the window to record (`r` = refresh, `q` = quit)
 3. Type a **name** for the recording (Enter = `recording`)
 4. Recording starts — locked to that exact window
 5. **Close the window** to stop and save
 6. The picker returns for the next recording
 
-### List windows
+### List Windows
 
 ```bash
 python record.py --list
 ```
 
-Prints all open windows (exe | title) and exits.
-
-### Log output
+### 📟 Log Output
 
 ```
 [rec] ● STARTED  'my-class'  window='Teams Meeting'
@@ -89,32 +140,73 @@ Prints all open windows (exe | title) and exits.
 [file] ✔ saved -> recordings/my-class_2026-09-08_14-30-00.mkv
 ```
 
-## How It Works
+---
 
-OBS Window Capture matches windows by `title:class:exe` with a priority rule. Its "match by exe" fallback means that when a window's title changes, OBS can re-bind to *any* window of that program. This script eliminates that failure:
+## 🔧 How It Works
 
-1. **Pins the exact window** by its Windows handle (HWND) at recording start.
-2. **Re-aims on title change** — every tick, if the window title changed, the script points OBS at the same HWND's new identity before the fallback can drift.
-3. **Stops only on window close** — title changes never stop recording, and a new matching window never hijacks it.
-4. **Dedicated scene** — the OBS scene holds only one source (window capture). The script verifies this before every recording and aborts if anything else is present.
+OBS Window Capture matches windows by `title:class:exe` with a priority rule. Its "match by exe" fallback can drift to other windows when titles change. GhostRec eliminates that:
 
-## Intel iGPU Workaround
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. PIN by HWND        →  Exact window locked           │
+│  2. RE-AIM on title    →  Same window, new title        │
+│  3. STOP on close      →  Never on title change         │
+│  4. DEDICATED scene    →  Only your window is captured  │
+└─────────────────────────────────────────────────────────┘
+```
 
-On machines with Intel integrated graphics, Window Capture may record **black** for desktop apps and standard Chrome. Fix: use a GPU-disabled browser.
+---
 
-1. Double-click `open_class_browser.bat` (opens Chrome with `--disable-gpu`, separate profile)
+## ⚠️ Intel iGPU Workaround
+
+On machines with Intel integrated graphics, Window Capture may record **black** for desktop apps and standard Chrome.
+
+**Fix:** Use a GPU-disabled browser.
+
+1. Double-click `open_class_browser.bat`
 2. Open your meeting/class in that browser window
 3. Run `python record.py` and pick that window
 
-> Do not use the Teams desktop app — it captures black on Intel iGPU. Use the browser instead.
+> 🚫 Do not use the Teams desktop app — it captures black on Intel iGPU. Use the browser.
 
-## Limitations
+---
 
-- **Windows only** — uses Win32 API (`win32gui`, `win32process`)
-- **OBS must stay open** — can be minimized, but must not be closed
-- **Minimized windows** — recording freezes if the window is minimized (keep it open behind other windows)
-- **Recording quality** — controlled by OBS Settings > Output > Recording
+## 📝 Limitations
 
-## License
+| Limitation | Notes |
+|------------|-------|
+| 🪟 Windows only | Uses Win32 API (`win32gui`, `win32process`) |
+| 🔴 OBS must stay open | Can be minimized, but not closed |
+| ❄️ Minimized windows | Recording freezes — keep window open behind others |
+| 🎥 Recording quality | Controlled by OBS Settings → Output → Recording |
 
-MIT
+---
+
+## 📁 Project Structure
+
+```
+ghostrec-obs/
+├── record.py              # Main script
+├── config.example.json    # Config template
+├── requirements.txt       # Python dependencies
+├── start_recorder.bat     # One-click launcher
+├── open_class_browser.bat # GPU-disabled Chrome helper
+├── .gitignore
+└── README.md
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Feel free to open issues or submit PRs.
+
+---
+
+
+
+<div align="center">
+
+**Made with ❤️ for content creators who want clean recordings.**
+
+</div>
