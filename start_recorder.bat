@@ -26,41 +26,14 @@ if not defined PY (
 rem --- utf-8 safe output (window titles, status line) --------------------------
 set "PYTHONUTF8=1"
 
-rem --- deps (first run only) ---------------------------------------------------
-%PY% -c "import obsws_python, win32gui" >nul 2>nul
+rem --- setup (dependencies + config) -------------------------------------------
+echo [i] Running setup (checks deps, config, OBS connection)...
+%PY% setup.py
 if errorlevel 1 (
-    echo [i] Installing requirements - one time only...
-    %PY% -m pip install -r requirements.txt
-)
-
-rem --- wait for the OBS WebSocket ----------------------------------------------
-set /a n=0
-:wait_obs
-netstat -ano | findstr /r /c:":4455 .*LISTENING" >nul 2>nul && goto obs_ok
-set /a n+=1
-if %n%==8 (
-    echo [!] OBS WebSocket not detected on port 4455.
-    echo     Is OBS Studio open?  Tools -^> WebSocket Server Settings -^> Enable.
-    choice /c YN /n /m "    Start OBS now? [Y/N] "
-    if not errorlevel 2 (
-        if exist "C:\Program Files\obs-studio\bin\64bit\obs64.exe" (
-            start "" "C:\Program Files\obs-studio\bin\64bit\obs64.exe" --startminimized
-        ) else (
-            echo     OBS not found at its default path - start it manually.
-        )
-    )
-)
-if %n% geq 90 (
-    echo [!] Giving up: OBS WebSocket never appeared on port 4455.
+    echo [!] Setup failed. Please check output above.
     pause
     exit /b 1
 )
-timeout /t 2 /nobreak >nul
-goto wait_obs
-
-:obs_ok
-echo [i] OBS WebSocket detected.
-echo.
 
 rem --- run the recorder (interactive window picker in THIS console) -------------
 %PY% record.py %*

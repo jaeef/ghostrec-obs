@@ -37,6 +37,7 @@ import shutil
 import sys
 import threading
 import time
+import logging
 from datetime import datetime
 
 import obsws_python as obsws
@@ -52,6 +53,52 @@ except Exception:
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
+def ensure_config():
+    if os.path.exists(CONFIG_PATH):
+        return
+    example = os.path.join(os.path.dirname(CONFIG_PATH), "config.example.json")
+    if os.path.exists(example):
+        shutil.copy(example, CONFIG_PATH)
+        print(f"[config] created {CONFIG_PATH} from example")
+    else:
+        default = {
+            "obs": {"host": "127.0.0.1", "port": 4455, "password": ""},
+            "capture_scene_name": "ClassRecScene",
+            "capture_source_name": "ClassCapture",
+            "output_folder": "./recordings",
+            "poll_seconds": 3,
+            "audio": {
+                "check": True,
+                "input_name": "Desktop Audio",
+                "silence_db": -55.0,
+                "silence_alert_seconds": 30,
+                "minimize_warn_seconds": 60
+            }
+        }
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(default, f, indent=2)
+        print(f"[config] created default {CONFIG_PATH}")
+
+def validate_config(cfg):
+    required = ["obs", "output_folder"]
+    for key in required:
+        if key not in cfg:
+            raise ValueError(f"Missing config key: {key}")
+    cfg.setdefault("capture_scene_name", "ClassRecScene")
+    cfg.setdefault("capture_source_name", "ClassCapture")
+    cfg.setdefault("poll_seconds", 3)
+    audio = cfg.setdefault("audio", {})
+    audio.setdefault("check", True)
+    audio.setdefault("input_name", "Desktop Audio")
+    audio.setdefault("silence_db", -55.0)
+    audio.setdefault("silence_alert_seconds", 30)
+    audio.setdefault("minimize_warn_seconds", 60)
+    obs = cfg.get("obs", {})
+    obs.setdefault("host", "127.0.0.1")
+    obs.setdefault("port", 4455)
+    obs.setdefault("password", "")
+    return cfg
+
 
 # --------------------------------------------------------------------------- #
 # Window enumeration (title / class / exe) via Win32                          #
@@ -60,19 +107,26 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 _QueryFullProcessImageName = ctypes.windll.kernel32.QueryFullProcessImageNameW
 _OpenProcess = ctypes.windll.kernel32.OpenProcess
 _CloseHandle = ctypes.windll.kernel32.CloseHandle
+_pid_exe_cache = {}
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 def _exe_for_pid(pid):
     """Return basename of the executable for a pid, or '' on failure."""
+    if pid in _pid_exe_cache:
+        return _pid_exe_cache[pid]
     h = _OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not h:
+        _pid_exe_cache[pid] = ""
         return ""
     try:
         buf = ctypes.create_unicode_buffer(1024)
         size = wt.DWORD(1024)
         if _QueryFullProcessImageName(h, 0, buf, ctypes.byref(size)):
-            return os.path.basename(buf.value)
+            exe = os.path.basename(buf.value)
+            _pid_exe_cache[pid] = exe
+            return exe
+        _pid_exe_cache[pid] = ""
         return ""
     finally:
         _CloseHandle(h)
@@ -197,7 +251,11 @@ class AudioWatcher:
 
     def on_input_volume_meters(self, data):
         peak = 0.0
-        for inp in getattr(data, "inputs", []):
+        # OBS may pass inputs as attribute or dict key
+        inputs = getattr(data, "inputs", None)
+        if inputs is None:
+            inputs = data.get("inputs", []) if isinstance(data, dict) else []
+        for inp in inputs:
             if inp.get("inputName") != self.input_name:
                 continue
             for ch in inp.get("inputLevelsMul", []):
@@ -246,9 +304,13 @@ def ensure_scene_and_source(req, scene_name, source_name):
         print(f"[obs] creating dedicated scene '{scene_name}'")
         req.create_scene(scene_name)
 
+    # Remove all existing items from the scene to keep it clean
     items = req.get_scene_item_list(scene_name).scene_items
-    if any(i["sourceName"] == source_name for i in items):
-        return scene_name  # already in this scene
+    for item in items:
+        try:
+            req.remove_scene_item(scene_name, item["sceneItemId"])
+        except Exception:
+            pass
 
     # OBS input names are GLOBAL. If the source exists (e.g. left in another scene
     # from a previous run) we add it to this scene instead of recreating it.
@@ -313,14 +375,16 @@ def stop_and_finalize(req, timeout=30):
         res = req.stop_record()
     except Exception as e:
         print(f"[rec] stop_record failed: {e}")
-        return ""
+        return "", True
     src_path = getattr(res, "output_path", "") or ""
 
+    timed_out = True
     # 1) wait until OBS reports the recording output is no longer active
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             if not req.get_record_status().output_active:
+                timed_out = False
                 break
         except Exception:
             break
@@ -333,10 +397,13 @@ def stop_and_finalize(req, timeout=30):
         if src_path and os.path.exists(src_path):
             size = os.path.getsize(src_path)
             if size == last and size > 0:
+                timed_out = False
                 break
             last = size
         time.sleep(0.7)
-    return src_path
+    if timed_out:
+        print(f"[rec] WARNING: file finalization timed out; file may be incomplete.")
+    return src_path, timed_out
 
 
 def load_config():
@@ -354,16 +421,30 @@ def _file_recording(src_path, out_dir, name):
     if not src_path or not os.path.exists(src_path):
         print(f"[file] OBS output path missing ('{src_path}'); check OBS recording folder")
         return
+    # Ensure file is not locked by trying to open it read-only
+    try:
+        with open(src_path, 'rb') as f:
+            pass
+    except Exception as e:
+        print(f"[file] File still locked or inaccessible: {e}. Skipping move.")
+        return
     os.makedirs(out_dir, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     ext = os.path.splitext(src_path)[1] or ".mkv"
     safe = "".join(c for c in name if c.isalnum() or c in "-_") or "recording"
     dst = os.path.join(out_dir, f"{safe}_{stamp}{ext}")
-    try:
-        shutil.move(src_path, dst)
-        print(f"[file] ✔ saved -> {dst}\n")
-    except Exception as e:
-        print(f"[file] move failed ({e}); left at {src_path}\n")
+    # Retry move with backoff
+    for attempt in range(1, 4):
+        try:
+            shutil.move(src_path, dst)
+            print(f"[file] ✔ saved -> {dst}\n")
+            return
+        except Exception as e:
+            if attempt < 3:
+                print(f"[file] move attempt {attempt} failed: {e}, retrying in 1s...")
+                time.sleep(1)
+            else:
+                print(f"[file] move failed after retries ({e}); left at {src_path}\n")
 
 
 def print_banner(audio_cfg, ver, scene_name, source_name, out_dir):
@@ -456,6 +537,7 @@ def record_window(req, win, name, scene_name, source_name, out_dir,
     rec_started = time.time()
     pinned = get_window_info(win["hwnd"]) or dict(win)
     last_pointed = obs_window_value(pinned)
+    min_warn_sec = audio_cfg.get("minimize_warn_seconds", 60)
     last_min_warn = 0.0
     last_audio_warn = 0.0
     if audio:
@@ -496,7 +578,7 @@ def record_window(req, win, name, scene_name, source_name, out_dir,
 
             # 2b) minimized? WGC freezes minimized windows
             if (win32gui.IsIconic(pinned["hwnd"])
-                    and time.time() - last_min_warn > 60):
+                    and time.time() - last_min_warn > min_warn_sec):
                 print("\n[pin] ⚠ window is MINIMIZED — recording is frozen. "
                       "Restore it (behind other windows is fine).")
                 last_min_warn = time.time()
@@ -517,10 +599,28 @@ def record_window(req, win, name, scene_name, source_name, out_dir,
         interrupted = True
         print(f"\n[quit] Ctrl+C — stopping & saving '{name}', do not close yet...")
 
-    src_path = stop_and_finalize(req)
-    _file_recording(src_path, out_dir, name)
+    src_path, timed_out = stop_and_finalize(req)
+    if timed_out:
+        print(f"[rec] WARNING: recording file may be incomplete. Check {src_path}")
+        # Do not move incomplete file; leave it in OBS output folder.
+    else:
+        _file_recording(src_path, out_dir, name)
     return "interrupted" if interrupted else "done"
 
+
+def prompt_password():
+    print("\nOBS WebSocket password not set.")
+    print("To get it: OBS -> Tools -> WebSocket Server Settings -> copy password.")
+    pwd = input("Enter password (or leave empty to skip): ").strip()
+    return pwd
+
+def find_window_by_title(target):
+    """Return first window dict whose title contains target (case-insensitive)."""
+    target_lower = target.lower()
+    for w in list_windows():
+        if target_lower in w['title'].lower():
+            return w
+    return None
 
 def main():
     parser = argparse.ArgumentParser(
@@ -528,40 +628,79 @@ def main():
                     "from a list; other windows are never recorded.")
     parser.add_argument("--list", action="store_true",
                         help="print every open window (exe | title) and exit")
+    parser.add_argument("--version", action="store_true",
+                        help="print version and exit")
+    parser.add_argument("--auto", action="store_true",
+                        help="skip picker and record the first window matching --target")
+    parser.add_argument("--target", type=str,
+                        help="window title substring to match (used with --auto)")
     args = parser.parse_args()
 
     if args.list:
         for w in list_windows():
             print(f"{w['exe']:<26} | {w['title']}")
         return
+    if args.version:
+        print("GhostRec OBS v1.0.0")
+        return
 
+    ensure_config()  # Create default config if missing
     cfg = load_config()
-    o = cfg["obs"]
-    source_name = cfg["capture_source_name"]
-    scene_name = cfg.get("capture_scene_name", "ClassRecScene")
-    out_dir = cfg["output_folder"]
-    poll = cfg.get("poll_seconds", 3)
-    audio_cfg = cfg.get("audio", {})
+    cfg = validate_config(cfg)
+    if not cfg.get("obs", {}).get("password"):
+        pwd = prompt_password()
+        if pwd:
+            cfg["obs"]["password"] = pwd
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+            print("[config] password saved")
+        else:
+            print("[obs] ERROR: password required.")
+            sys.exit(1)
 
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(cfg["output_folder"], exist_ok=True)
 
     print("[obs] connecting...")
-    req = obsws.ReqClient(host=o["host"], port=o["port"], password=o["password"],
-                          timeout=5)
+    req = obsws.ReqClient(host=cfg["obs"]["host"], port=cfg["obs"]["port"],
+                          password=cfg["obs"]["password"], timeout=5)
     ver = req.get_version()
     print(f"[obs] connected. OBS {ver.obs_version}, ws {ver.obs_web_socket_version}")
 
-    ensure_scene_and_source(req, scene_name, source_name)
+    ensure_scene_and_source(req, cfg["capture_scene_name"], cfg["capture_source_name"])
 
     audio = None
-    if audio_cfg.get("check"):
+    if cfg["audio"].get("check"):
         audio = AudioWatcher(cfg)
-        audio.start(o["host"], o["port"], o["password"])
+        audio.start(cfg["obs"]["host"], cfg["obs"]["port"], cfg["obs"]["password"])
 
-    print_banner(audio_cfg, ver, scene_name, source_name, out_dir)
+    print_banner(cfg["audio"], ver, cfg["capture_scene_name"],
+                 cfg["capture_source_name"], cfg["output_folder"])
+
+    if args.auto:
+        if not args.target:
+            print("[auto] ERROR: --target required with --auto")
+            sys.exit(1)
+        win = find_window_by_title(args.target)
+        if not win:
+            print(f"[auto] No window found with title containing '{args.target}'")
+            sys.exit(1)
+        print(f"[auto] Found window: {win['exe']} | {win['title']}")
+        name = args.target.replace(" ", "_")[:30] or "auto_recording"
+        result = record_window(req, win, name, cfg["capture_scene_name"],
+                               cfg["capture_source_name"], cfg["output_folder"],
+                               cfg["poll_seconds"], audio, cfg["audio"])
+        if result == "interrupted":
+            print("[quit] bye.")
+        elif result == "aborted":
+            print("[auto] Recording aborted.")
+        else:
+            print("[auto] Recording saved.")
+        if audio:
+            audio.stop()
+        return
+
     try:
         while True:
-            # picker ALWAYS shown; loop back here after every recording
             win = choose_window_interactively(list_windows())
             if win is None:
                 print("[quit] bye.")
@@ -570,8 +709,9 @@ def main():
             if name is None:
                 print("[quit] no name given — back to the picker.\n")
                 continue
-            result = record_window(req, win, name, scene_name, source_name,
-                                   out_dir, poll, audio, audio_cfg)
+            result = record_window(req, win, name, cfg["capture_scene_name"],
+                                   cfg["capture_source_name"], cfg["output_folder"],
+                                   cfg["poll_seconds"], audio, cfg["audio"])
             if result == "interrupted":
                 print("[quit] bye.")
                 break

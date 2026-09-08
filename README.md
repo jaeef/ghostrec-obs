@@ -10,7 +10,6 @@ A Python-powered OBS automation tool that locks onto a single window by its Wind
 [![OBS Studio](https://img.shields.io/badge/OBS_Studio-28+-302E33?style=for-the-badge&logo=obs-studio&logoColor=white)](https://obsproject.com)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com)
 
-
 <br>
 
 **Pick a window → Record → Close to stop → Done.**
@@ -44,10 +43,9 @@ A Python-powered OBS automation tool that locks onto a single window by its Wind
 ### Option 1: One-Click (Recommended)
 
 1. **Clone** the repo
-2. **Copy** `config.example.json` → `config.json` and fill in your OBS password
-3. **Double-click** `start_recorder.bat`
+2. **Double-click** `start_recorder.bat`
 
-That's it. The launcher handles everything.
+The launcher handles everything: checks Python, installs dependencies, helps you set up OBS WebSocket, creates `config.json`, and starts the recorder.
 
 ### Option 2: Manual
 
@@ -59,9 +57,8 @@ cd ghostrec-obs
 # Install dependencies
 pip install -r requirements.txt
 
-# Setup config
-copy config.example.json config.json
-# Edit config.json → fill in obs.password
+# Setup config (interactive)
+python setup.py
 
 # Run
 python record.py
@@ -71,7 +68,7 @@ python record.py
 
 ## ⚙️ Configuration
 
-Copy `config.example.json` to `config.json` and edit:
+The first run of `start_recorder.bat` (or `setup.py`) creates `config.json`. You can edit it later:
 
 ```json
 {
@@ -80,12 +77,16 @@ Copy `config.example.json` to `config.json` and edit:
     "port": 4455,
     "password": "YOUR_OBS_WEBSOCKET_PASSWORD"
   },
+  "capture_scene_name": "ClassRecScene",
+  "capture_source_name": "ClassCapture",
   "output_folder": "./recordings",
+  "poll_seconds": 3,
   "audio": {
     "check": true,
     "input_name": "Desktop Audio",
     "silence_db": -55.0,
-    "silence_alert_seconds": 30
+    "silence_alert_seconds": 30,
+    "minimize_warn_seconds": 60
   }
 }
 ```
@@ -95,17 +96,27 @@ Copy `config.example.json` to `config.json` and edit:
 | `obs.host` | `127.0.0.1` | OBS WebSocket host |
 | `obs.port` | `4455` | OBS WebSocket port |
 | `obs.password` | — | Your OBS WebSocket password |
+| `capture_scene_name` | `ClassRecScene` | OBS scene name |
+| `capture_source_name` | `ClassCapture` | OBS window capture source name |
 | `output_folder` | `./recordings` | Where saved videos go |
+| `poll_seconds` | `3` | Status check interval (seconds) |
 | `audio.check` | `true` | Enable silence detection |
+| `audio.input_name` | `Desktop Audio` | Audio input name in OBS |
 | `audio.silence_db` | `-55.0` | Silence threshold (dB) |
 | `audio.silence_alert_seconds` | `30` | Seconds of silence before warning |
+| `audio.minimize_warn_seconds` | `60` | Seconds of minimization before warning |
 
 ### 🔌 Enable OBS WebSocket
 
+OBS must have the WebSocket server enabled. Default host/port (`127.0.0.1:4455`) work for most users.
+
 1. Open **OBS Studio**
 2. Go to **Tools → WebSocket Server Settings**
-3. Enable the server (port `4455`)
-4. Copy the password into `config.json`
+3. Check **Enable WebSocket server** (port should be `4455`)
+4. Copy the password from **Server Password** (or leave blank)
+5. Run `start_recorder.bat` — it will ask for the password, test the connection, and save to `config.json`
+
+If you prefer manual setup: copy `config.example.json` to `config.json` and paste the password.
 
 ---
 
@@ -187,6 +198,7 @@ On machines with Intel integrated graphics, Window Capture may record **black** 
 ```
 ghostrec-obs/
 ├── record.py              # Main script
+├── setup.py               # Dependency & config helper
 ├── config.example.json    # Config template
 ├── requirements.txt       # Python dependencies
 ├── start_recorder.bat     # One-click launcher
@@ -203,10 +215,8 @@ Contributions welcome! Feel free to open issues or submit PRs.
 
 ---
 
-
-
 <div align="center">
 
-**Made with ❤️ for content creators who want clean recordings.**
+**Record classes, meetings, or any window — keep working while it records.**
 
 </div>

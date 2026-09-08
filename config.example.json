@@ -12,6 +12,7 @@
     "check": true,
     "input_name": "Desktop Audio",
     "silence_db": -55.0,
-    "silence_alert_seconds": 30
+    "silence_alert_seconds": 30,
+    "minimize_warn_seconds": 60
   }
 }
