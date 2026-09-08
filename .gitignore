@@ -1,0 +1,7 @@
+__pycache__/
+.claude/
+config.json
+recordings/
+*.png
+run_log.txt
+run_err.txt

@@ -1,0 +1,17 @@
+{
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4455,
+    "password": "YOUR_OBS_WEBSOCKET_PASSWORD"
+  },
+  "capture_scene_name": "ClassRecScene",
+  "capture_source_name": "ClassCapture",
+  "output_folder": "./recordings",
+  "poll_seconds": 3,
+  "audio": {
+    "check": true,
+    "input_name": "Desktop Audio",
+    "silence_db": -55.0,
+    "silence_alert_seconds": 30
+  }
+}
